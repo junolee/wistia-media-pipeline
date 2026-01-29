@@ -1,0 +1,13 @@
+**/.env
+**/venv*
+**/__pycache__*
+**/data
+**/tmp
+.devcontainer
+**/jars*
+**/.terraform*
+*.tfstate*
+*.tfvars
+*.tfvars.json
+*dev.ipynb*
+*delete_s3.sh
