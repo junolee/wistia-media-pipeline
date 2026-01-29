@@ -26,10 +26,9 @@ jobs:
       - name: Package and upload ingest Lambda to S3
         run: |
           cd ingest
+          pip install -r ../requirements.txt -t .
           find . -type d -name "__pycache__" -exec rm -rf {} +
           find . -type f -name "*.pyc" -delete
           zip -r ../ingest_lambda.zip .
           cd ..
           aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
-
-

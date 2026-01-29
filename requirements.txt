@@ -1,5 +1,6 @@
 boto3
 pyspark==3.5
+requests
 
 # local development
 pytest
