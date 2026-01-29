@@ -8,9 +8,3 @@ pytest-mock
 python-dotenv
 pandas
 jupyter
-
-# dashboard
-awswrangler
-streamlit==1.32.0
-pandas
-plotly

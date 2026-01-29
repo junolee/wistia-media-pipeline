@@ -32,3 +32,4 @@ jobs:
           zip -r ../ingest_lambda.zip .
           cd ..
           aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
+          aws lambda update-function-code --function-name wistia_to_s3 --s3-bucket jl-wistia-pipeline --s3-key lambda/ingest_lambda.zip --publish
