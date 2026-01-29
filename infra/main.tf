@@ -78,8 +78,8 @@ resource "aws_iam_role" "github_actions_role" {
 }
 
 resource "aws_iam_policy" "github_actions_policy" {
-  name        = "ws-s3-policy"
-  description = "Minimal S3 access for GitHub Actions to ws-wistia-pipeline"
+  name        = "ws-github-actions-policy"
+  description = "Access for GitHub Actions to s3 and lambda"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -98,6 +98,15 @@ resource "aws_iam_policy" "github_actions_policy" {
           "s3:DeleteObject",
         ]
         Resource = "arn:aws:s3:::jl-wistia-pipeline/*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "lambda:UpdateFunctionCode",
+          "lambda:GetFunction",
+          "lambda:ListFunctions"
+        ],
+        Resource = "arn:aws:lambda:us-east-1:423623837966:function:wistia_to_s3"
       }
     ]
   })
