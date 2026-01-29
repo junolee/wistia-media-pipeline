@@ -23,13 +23,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Package and upload ingest Lambda to S3
+      - name: Build Lambda
+        working-directory: ingest
         run: |
-          cd ingest
-          pip install -r ../requirements.txt -t .
+          rm local_run.py
+          pip install -r requirements-lambda.txt -t .
           find . -type d -name "__pycache__" -exec rm -rf {} +
           find . -type f -name "*.pyc" -delete
           zip -r ../ingest_lambda.zip .
-          cd ..
+
+      - name: Deploy Lambda
+        run: |
           aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
           aws lambda update-function-code --function-name wistia_to_s3 --s3-bucket jl-wistia-pipeline --s3-key lambda/ingest_lambda.zip --publish
