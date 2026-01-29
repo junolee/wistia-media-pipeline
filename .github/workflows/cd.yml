@@ -1,0 +1,35 @@
+name: Deploy Glue Scripts
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  deploy-glue:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Package and upload ingest Lambda to S3
+        run: |
+          cd ingest
+          find . -type d -name "__pycache__" -exec rm -rf {} +
+          find . -type f -name "*.pyc" -delete
+          zip -r ../ingest_lambda.zip .
+          cd ..
+          aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
+
+
