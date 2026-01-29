@@ -35,6 +35,14 @@ def build_args():
   }
 
 
+def print_sql_columns_raw(df, table):
+  columns_sql = f'\n{table.upper()}_COLUMNS = """'
+  for col, col_type in df.dtypes:
+    columns_sql += f"\n{col}     string,"
+  columns_sql += '\n"""'
+  print(columns_sql)
+
+
 def print_sql_columns(df, table):
   columns_sql = f'\n{table.upper()}_COLUMNS = """'
   for col, col_type in df.dtypes:
@@ -51,6 +59,11 @@ def main_tests(spark, config):
 
   raw_mediaDF = load_raw(spark, f"{c.source_path}/media/")
   raw_eventsDF = load_raw(spark, f"{c.source_path}/events/")
+
+  RAW_TABLES = {
+    "events_raw": raw_eventsDF,
+    "media_raw": raw_mediaDF,
+  }
 
   dim_datesDF = build_dates(spark, raw_eventsDF)
   dim_visitorsDF = build_visitors(raw_eventsDF)
@@ -69,14 +82,18 @@ def main_tests(spark, config):
   }
 
   counts = []
-  for table, df in SILVER_TABLES.items():
-    # append_parquet(df, f"{c.target_dir}/{table}/")
-
+  for table, df in RAW_TABLES.items():
     counts.append(f"{table}: {df.count()}")
-
     print(f"\n{table} columns: " + ", ".join(df.columns))
+    print_sql_columns_raw(df, table)
 
-    # print_sql_columns(df, table)
+  print("\nSource table counts:", counts)
+
+  counts = []
+  for table, df in SILVER_TABLES.items():
+    counts.append(f"{table}: {df.count()}")
+    print(f"\n{table} columns: " + ", ".join(df.columns))
+    print_sql_columns(df, table)
 
   print("\nTarget table counts:", counts)
 

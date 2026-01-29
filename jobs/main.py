@@ -151,14 +151,17 @@ def build_events(raw_eventsDF, mediaDF):
     ("percent_viewed", "percent_viewed"),
   ]
   TARGET_TYPES = {
-    "created_at": "string",
+    "created_at": "timestamp",
     "visitor_id": "string",
     "media_id": "string",
     "percent_viewed": "double",
   }
   exprs = []
   for old_name, new_name in RENAME_PAIRS:
-    exprs.append(F.col(old_name).cast(TARGET_TYPES[new_name]).alias(new_name))
+    if new_name in ["created_at"]:
+      exprs.append(F.to_date(F.col(old_name), "yyyy-MM-dd").alias(new_name))
+    else:
+      exprs.append(F.col(old_name).cast(TARGET_TYPES[new_name]).alias(new_name))
 
   eventsDF = (
     raw_eventsDF.select(*exprs)
