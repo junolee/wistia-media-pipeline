@@ -62,8 +62,11 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
       f"No new events to ingest for media IDs for date range {start_date} to {end_date}."
     )
     return
-
-  key = f"{cfg.raw_prefix}/events/ingest_date={ingest_date}/events.jsonl"
+  if start_date and end_date:
+    filename = f"events_{start_date}-{end_date}"
+  else:
+    filename = "events_full_refresh"
+  key = f"{cfg.raw_prefix}/events/ingest_date={ingest_date}/{filename}.jsonl"
   print(f"Writing events data to s3://{cfg.bucket_name}/{key}")
   write_json_lines_to_s3(s3, cfg.bucket_name, key, events)
 
@@ -98,6 +101,7 @@ def main(
     last_run_date = load_checkpoint(s3, c.bucket_name, c.checkpoint_path)
     if last_run_date:
       start_date = last_run_date
+      end_date = datetime.datetime.utcnow().date().isoformat()
       print(f"Using checkpoint start_date: {start_date}")
     else:
       print("No checkpoint available, running full refresh for last 2 years")
