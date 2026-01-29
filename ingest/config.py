@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from dataclasses import dataclass
 
 import boto3
@@ -76,6 +77,22 @@ def save_checkpoint(s3, bucket_name, path, new_last_run_ts):
 # ============================================================================
 
 
+def get_with_backoff(url, headers=None, params=None, max_retries=5, backoff_factor=1.0):
+  for attempt in range(1, max_retries + 1):
+    try:
+      response = requests.get(url, headers=headers, params=params, timeout=10)
+      if response.status_code in {500, 502, 503, 504}:
+        raise requests.HTTPError(f"{response.status_code} retryable", response=response)
+      response.raise_for_status()
+      return response
+    except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as e:
+      if attempt == max_retries:
+        raise
+      sleep_s = backoff_factor * (2 ** (attempt - 1))
+      print(f"Retry {attempt}/{max_retries} after error {e}, sleeping {sleep_s:.1f}s")
+      time.sleep(sleep_s)
+
+
 class WistiaAPIClient:
   """
   Client for interacting with the Wistia Stats API
@@ -88,15 +105,14 @@ class WistiaAPIClient:
     """
     Helper function to make GET requests to the Wistia API
     """
-    response = requests.get(
-      url=f"https://api.wistia.com/v1/{endpoint}",
-      headers={
-        "accept": "application/json",
-        "authorization": f"Bearer {self.api_token}",
-      },
-      params=params,
-    )
-    response.raise_for_status()
+    url = f"https://api.wistia.com/v1/{endpoint}"
+    headers = {
+      "accept": "application/json",
+      "authorization": f"Bearer {self.api_token}",
+    }
+
+    response = get_with_backoff(url, headers=headers, params=params or {})
+
     return response.json()
 
   def get_media(self, hashed_ids: list[str]) -> dict:
@@ -109,7 +125,7 @@ class WistiaAPIClient:
     - Optionally filters by start_date and end_date
     """
     all_events = []
-    page = 0
+    page = 1
 
     while True:
       events = self._get_request(
@@ -126,9 +142,12 @@ class WistiaAPIClient:
         break
       all_events.extend(events)
       page += 1
-      print(f"Fetched {len(events)} events for media ID: {media_id}")
+      if page % 10 == 0:
+        print(
+          f"Fetched {900 + len(events)} events for media ID: {media_id} - page: {page} - time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
-    print(f"Fetched {len(all_events)} events")
+    print(f"Fetched {len(all_events)} events for media ID: {media_id}")
     return all_events
 
 

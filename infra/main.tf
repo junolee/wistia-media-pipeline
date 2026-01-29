@@ -162,6 +162,7 @@ resource "aws_lambda_function" "ingest" {
   role          = aws_iam_role.lambda_role.arn
   handler       = "lambda_function.lambda_handler"
   runtime       = "python3.12"
+  timeout       = 900
 
   s3_bucket = "jl-wistia-pipeline"
   s3_key    = "lambda/ingest_lambda.zip"

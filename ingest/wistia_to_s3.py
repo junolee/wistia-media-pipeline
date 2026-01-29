@@ -52,14 +52,15 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
     media_events = ws.list_events(
       media_id=media_id, start_date=start_date, end_date=end_date
     )
+    for record in media_events:
+      record["media_id"] = media_id
+      record["ingest_ts"] = ingest_ts
     events.extend(media_events)
 
-  for record in events:
-    record["media_id"] = media_id  # add media_id to each event record
-    record["ingest_ts"] = ingest_ts
-
   if not events:
-    print("No new events to ingest.")
+    print(
+      f"No new events to ingest for media IDs for date range {start_date} to {end_date}."
+    )
     return
 
   key = f"{cfg.raw_prefix}/events/ingest_date={ingest_date}/events.jsonl"
@@ -91,7 +92,7 @@ def main(
   new_last_run_ts = datetime.datetime.utcnow().isoformat()
 
   if start_date:
-    print(f"Using provided start_date: {start_date} (override state checkpoint)")
+    print(f"Using provided start_date: {start_date} and end_date: {end_date}.")
 
   elif pipeline_mode == "incremental":
     last_run_date = load_checkpoint(s3, c.bucket_name, c.checkpoint_path)
@@ -103,11 +104,6 @@ def main(
   else:
     print("Running full refresh for last 2 years")
 
-  if start_date:
-    print(f"Fetching events in incremental mode since last run date: {start_date}")
-  else:
-    print("Fetching all events, up to 2 years ago")
-
   ingest_media(ws, s3, c)
   ingest_all_events(ws, s3, c, start_date=start_date, end_date=end_date)
 
@@ -115,6 +111,6 @@ def main(
     print("Persisting state...")
     save_checkpoint(s3, c.bucket_name, c.checkpoint_path, new_last_run_ts)
   else:
-    print("Not persisting state...")
+    print(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
 
   return
