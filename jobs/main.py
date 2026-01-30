@@ -163,7 +163,7 @@ def build_events(raw_eventsDF, mediaDF):
   eventsDF = (
     raw_eventsDF.select(*exprs)
     .withColumn("date", F.to_date(F.col("created_at")))
-    .withColumn("p_date", F.date_trunc("year", F.col("date")).cast("date"))
+    .withColumn("p_date", F.col("date"))
     .withColumn("updated_at", F.current_timestamp())
   ).join(mediaDF.select("media_id", "duration"), on="media_id", how="left")
 
@@ -198,7 +198,7 @@ def build_media_engagement(eventsDF, mediaDF):
       F.max("percent_viewed").alias("max_percent_viewed"),
       F.avg("percent_viewed").alias("avg_percent_viewed"),
     )
-    .withColumn("p_date", F.date_trunc("year", F.col("date")).cast("date"))
+    .withColumn("p_date", F.col("date"))
     .withColumn("updated_at", F.current_timestamp())
   )
   return dailyDF.select(

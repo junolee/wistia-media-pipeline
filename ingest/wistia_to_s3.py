@@ -64,6 +64,8 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
     return
   if start_date and end_date:
     filename = f"events_{start_date}-{end_date}"
+  elif start_date:
+    filename = f"events_{start_date}-latest"
   else:
     filename = "events_full_refresh"
   key = f"{cfg.raw_prefix}/events/ingest_date={ingest_date}/{filename}.jsonl"
@@ -95,21 +97,27 @@ def main(
   new_last_run_ts = datetime.datetime.utcnow().isoformat()
 
   if start_date:
-    print(f"Using provided start_date: {start_date} and end_date: {end_date}.")
+    print(f"Using provided start_date: {start_date}.")
+    ingest_all_events(ws, s3, c, start_date=start_date)
 
-  elif pipeline_mode == "incremental":
-    last_run_date = load_checkpoint(s3, c.bucket_name, c.checkpoint_path)
-    if last_run_date:
-      start_date = last_run_date
-      end_date = datetime.datetime.utcnow().date().isoformat()
-      print(f"Using checkpoint start_date: {start_date}")
-    else:
-      print("No checkpoint available, running full refresh for last 2 years")
+  elif pipeline_mode == "incremental" and not start_date:
+    start_date = load_checkpoint(s3, c.bucket_name, c.checkpoint_path)
+
+    print(f"Using checkpoint start_date: {start_date}")
+
+    ingest_all_events(ws, s3, c, start_date=start_date)
+
   else:
     print("Running full refresh for last 2 years")
 
+    today = datetime.date.today()
+
+    start = today - datetime.timedelta(days=(365 * 2))
+    ingest_all_events(
+      ws, s3, c, start_date=start.isoformat(), end_date=today.isoformat()
+    )
+
   ingest_media(ws, s3, c)
-  ingest_all_events(ws, s3, c, start_date=start_date, end_date=end_date)
 
   if persist_state:
     print("Persisting state...")
@@ -117,4 +125,4 @@ def main(
   else:
     print(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
 
-  return
+  return {"start_date": start_date, "end_date": end_date}

@@ -259,3 +259,143 @@ resource "aws_glue_job" "jobs" {
     max_concurrent_runs = 1
   }
 }
+
+
+#=====================================
+# Step functions state machine: ws-workflow
+#=====================================
+
+data "aws_iam_policy_document" "stepfunctions_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "stepfunctions_role" {
+  name               = "ws-stepfunctions-role"
+  assume_role_policy = data.aws_iam_policy_document.stepfunctions_policy.json
+}
+
+locals {
+  stepfunctions_permissions = [
+    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+    "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
+    "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole",
+    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+    "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+  ]
+}
+
+resource "aws_iam_role_policy_attachment" "stepfunctions_role_attachment" {
+  for_each   = toset(local.stepfunctions_permissions)
+  role       = aws_iam_role.stepfunctions_role.name
+  policy_arn = each.value
+}
+
+
+resource "aws_cloudwatch_log_group" "ws_workflow" {
+  name              = "/aws/vendedlogs/states/ws-workflow"
+}
+
+resource "aws_sfn_state_machine" "ws_workflow" {
+  name     = "ws-workflow"
+  role_arn = aws_iam_role.stepfunctions_role.arn
+  definition = <<EOF
+  {
+    "Comment": "ws-ingest lambda -> ws-glue job",
+    "StartAt": "IngestLambda",
+    "States": {
+      "IngestLambda": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "OutputPath": "$.Payload",
+        "Parameters": {
+          "FunctionName": "wistia_to_s3",
+          "Payload": {
+            "pipeline_mode": "incremental",
+            "persist_state": true
+          }
+        },
+        "Next": "GlueJob"
+      },
+      "GlueJob": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::glue:startJobRun.sync",
+        "Parameters": {
+          "JobName": "ws-raw-to-curated",
+            "Arguments": {
+            "--PIPELINE_MODE": "incremental",
+            "--START_DATE.$": "$.start_date"
+          }
+        },
+        "End": true
+      }
+    },
+    "TimeoutSeconds": 900
+  }
+  EOF
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.ws_workflow.arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
+}
+
+#=====================================
+# EventBridge Scheduler to trigger Step Functions daily
+#=====================================
+
+resource "aws_iam_role" "eventbridge_scheduler_role" {
+  name = "ws-eventbridge-scheduler-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "scheduler.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_scheduler_policy" {
+  name = "ws-eventbridge-scheduler-policy"
+  role = aws_iam_role.eventbridge_scheduler_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "states:StartExecution"
+        Resource = aws_sfn_state_machine.ws_workflow.arn
+      }
+    ]
+  })
+}
+
+resource "aws_scheduler_schedule" "ws_workflow_daily" {
+  name       = "ws-workflow-daily"
+  group_name = "default"
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression          = "cron(0 0 * * ? *)" # every day at 00:00 UTC
+  schedule_expression_timezone = "UTC"
+
+  target {
+    arn      = aws_sfn_state_machine.ws_workflow.arn
+    role_arn = aws_iam_role.eventbridge_scheduler_role.arn
+  }
+}
