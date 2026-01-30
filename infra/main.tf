@@ -252,7 +252,7 @@ resource "aws_glue_job" "jobs" {
       "--TARGET_DB"        = "ws_curated"
       "--SOURCE_PATH"      = "s3a://${aws_s3_bucket.bucket.bucket}/raw"
       "--WAREHOUSE_DIR"    = "s3a://${aws_s3_bucket.bucket.bucket}/tables"
-      "--extra-py-files"   = "s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/config.py,s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/main_bronze.py"
+      "--extra-py-files"   = "s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/config.py,s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/main.py"
     }
 
   execution_property {
@@ -285,6 +285,7 @@ locals {
     "arn:aws:iam::aws:policy/AmazonS3FullAccess",
     "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
     "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole",
+    "arn:aws:iam::aws:policy/service-role/AWSLambdaRole",
     "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
     "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
   ]

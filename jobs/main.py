@@ -248,7 +248,7 @@ def build_dates(spark, raw_eventsDF):
   today = datetime.today().strftime("%Y-%m-%d")
 
   observed_datesDF = raw_eventsDF.select(
-    F.to_date(F.col("received_at"), "dd-MM-yyyy").alias("date")
+    F.to_date(F.col("received_at"), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias("date")
   )
 
   generated_datesDF = generate_dates(spark, "2024-01-29", today)
@@ -331,7 +331,8 @@ def main(spark, config):
 
   if c.pipeline_mode == "incremental" and c.start_date:
     raw_eventsDF = raw_eventsDF.filter(
-      F.to_date(F.col("received_at"), "dd-MM-yyyy") >= F.lit(c.start_date)
+      F.to_date(F.col("received_at"), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+      >= F.lit(c.start_date)
     )
     info(f"Filtered raw_eventsDF to records since start_date: {c.start_date}")
 
