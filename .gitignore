@@ -11,3 +11,4 @@
 *.tfvars.json
 *dev.ipynb*
 *delete_s3.sh
+**.DS_Store
