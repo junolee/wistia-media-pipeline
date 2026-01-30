@@ -38,17 +38,20 @@ LOCATION '{WAREHOUSE_S3}/{db_name}.db/{table_name}/'
 ;"""
   print(f"\nDROP TABLE {db_name}.{table_name};")
   print(ddl)
+  print(f"\nMSCK REPAIR TABLE {db_name}.{table_name};")
   return ddl
 
 
 RAW_PARTITION_COL = "ingest_date"
 RAW_TABLES = {"events": s.EVENTS_RAW_COLUMNS, "media": s.MEDIA_RAW_COLUMNS}
 
-
+TARGET_PARTITION_COL = "p_date"
 TARGET_TABLES_WITHOUT_PARTITIONS = {
   "dim_visitors": s.DIM_VISITORS_COLUMNS,
   "dim_dates": s.DIM_DATES_COLUMNS,
   "dim_media": s.DIM_MEDIA_COLUMNS,
+}
+TARGET_TABLES_WITH_PARTITIONS = {
   "fct_events": s.FCT_EVENTS_COLUMNS,
   "fct_media_engagement": s.FCT_MEDIA_ENGAGEMENT_COLUMNS,
 }
@@ -67,6 +70,11 @@ def print_target_ddls(database_name):
 
   for table, columns in TARGET_TABLES_WITHOUT_PARTITIONS.items():
     create_external_parquet_table(database_name, table, columns, partition_by=None)
+
+  for table, columns in TARGET_TABLES_WITH_PARTITIONS.items():
+    create_external_parquet_table(
+      database_name, table, columns, partition_by=TARGET_PARTITION_COL
+    )
 
 
 print_source_ddls(os.environ["SOURCE_DB"])

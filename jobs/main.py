@@ -26,17 +26,12 @@ def dedupe(inputDF, key, order_col="updated_at"):
   )
 
 
-def load_raw(spark, path, date_col=None, start_date=None):
+def load_raw(spark, path):
   """
-  Read raw table + filter by start_date (used for incremental processing)
+  Read raw table
   """
   df = spark.read.json(path)
-  if date_col and start_date:
-    df = df.filter(F.col(date_col) >= start_date)
-    since_start = f" new records since start_date: {start_date}"
-  else:
-    since_start = ""
-  info(f"Reading from path: {path}\n{df.count()}{since_start}")
+  info(f"Reading from path: {path}\n{df.count()} records loaded")
   return df
 
 
@@ -159,14 +154,16 @@ def build_events(raw_eventsDF, mediaDF):
   exprs = []
   for old_name, new_name in RENAME_PAIRS:
     if new_name in ["created_at"]:
-      exprs.append(F.to_date(F.col(old_name), "yyyy-MM-dd").alias(new_name))
+      exprs.append(
+        F.to_timestamp(F.col(old_name), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").alias(new_name)
+      )
     else:
       exprs.append(F.col(old_name).cast(TARGET_TYPES[new_name]).alias(new_name))
 
   eventsDF = (
     raw_eventsDF.select(*exprs)
     .withColumn("date", F.to_date(F.col("created_at")))
-    .withColumn("p_date", F.date_trunc("year", F.col("created_at")).cast("date"))
+    .withColumn("p_date", F.date_trunc("year", F.col("date")).cast("date"))
     .withColumn("updated_at", F.current_timestamp())
   ).join(mediaDF.select("media_id", "duration"), on="media_id", how="left")
 
@@ -201,6 +198,7 @@ def build_media_engagement(eventsDF, mediaDF):
       F.max("percent_viewed").alias("max_percent_viewed"),
       F.avg("percent_viewed").alias("avg_percent_viewed"),
     )
+    .withColumn("p_date", F.date_trunc("year", F.col("date")).cast("date"))
     .withColumn("updated_at", F.current_timestamp())
   )
   return dailyDF.select(
@@ -214,6 +212,7 @@ def build_media_engagement(eventsDF, mediaDF):
       "max_percent_viewed",
       "avg_percent_viewed",
       "updated_at",
+      "p_date",
     ]
   )
 
@@ -282,6 +281,31 @@ def append_parquet(df, path):
   df.write.mode("append").parquet(path)
 
 
+def overwrite_table(df, table):
+  """
+  Overwrite a non-partitioned Glue table (full rebuild)
+  """
+  info(f"Overwriting full table: {table}")
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+
+
+def overwrite_partitions(spark, df, table, partition_col):
+  """
+  Overwrite `table` only for partitions present in `df` (dynamic partition overwrite)
+  Run MSCK REPAIR TABLE to refresh partition metadata in Glue Catalog
+  """
+  partitions = [
+    row[partition_col] for row in df.select(partition_col).distinct().collect()
+  ]
+  info(f"Overwriting {table} table partitions: {partitions}")
+
+  value_columns = [c for c in df.columns if c != partition_col]
+  df = df.select(*value_columns, partition_col)  # order partition col last
+
+  df.write.mode("overwrite").insertInto(table, overwrite=True)
+  spark.sql(f"MSCK REPAIR TABLE {table}")
+
+
 def main(spark, config):
   """
   Build curated tables from raw datasets.
@@ -297,7 +321,6 @@ def main(spark, config):
   c = config
 
   info(f"Starting job - config: {c}")
-  start_date = "1900-01-01" if c.pipeline_mode == "full" else c.start_date
 
   raw_mediaDF = load_raw(spark, f"{c.source_path}/media/")
   raw_eventsDF = load_raw(spark, f"{c.source_path}/events/")
@@ -305,6 +328,13 @@ def main(spark, config):
   dim_datesDF = build_dates(spark, raw_eventsDF)
   dim_visitorsDF = build_visitors(raw_eventsDF)
   dim_mediaDF = build_media(raw_mediaDF, raw_eventsDF)
+
+  if c.pipeline_mode == "incremental" and c.start_date:
+    raw_eventsDF = raw_eventsDF.filter(
+      F.to_date(F.col("received_at"), "dd-MM-yyyy") >= F.lit(c.start_date)
+    )
+    info(f"Filtered raw_eventsDF to records since start_date: {c.start_date}")
+
   fct_eventsDF = build_events(raw_eventsDF, dim_mediaDF)
   fct_media_engagementDF = build_media_engagement(fct_eventsDF, dim_mediaDF)
 
@@ -320,11 +350,15 @@ def main(spark, config):
 
   counts = []
   for table, df in SILVER_TABLES.items():
-    append_parquet(df, f"{c.target_dir}/{table}/")
+    if table == "fct_events" or table == "fct_media_engagement":
+      overwrite_partitions(
+        spark, df, table=f"{c.target_db}.{table}", partition_col="p_date"
+      )
+    else:
+      overwrite_table(df, table=f"{c.target_db}.{table}")
 
     counts.append(f"{table}: {df.count()}")
-    print(f"\n{table} columns: " + ", ".join(df.columns))
 
   print("\nTarget table counts:", counts)
-  # table_counts(spark, schemas=[c.target_db])
+  table_counts(spark, schemas=[c.target_db])
   info(f"Completed job - config: {c}.")
