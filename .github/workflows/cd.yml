@@ -1,4 +1,4 @@
-name: Deploy Lambda Functions
+name: Deploy Jobs
 
 on:
   push:
@@ -36,3 +36,9 @@ jobs:
         run: |
           aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
           aws lambda update-function-code --function-name wistia_to_s3 --s3-bucket jl-wistia-pipeline --s3-key lambda/ingest_lambda.zip --publish
+
+      - name: Upload Glue job scripts to S3
+        run: |
+          aws s3 cp jobs/run.py s3://jl-wistia-pipeline/jobs/scripts/run.py
+          aws s3 cp jobs/config.py s3://jl-wistia-pipeline/jobs/libs/config.py
+          aws s3 cp jobs/main.py s3://jl-wistia-pipeline/jobs/libs/main.py

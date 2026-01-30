@@ -36,7 +36,6 @@ resource "aws_s3_object" "folders" {
 	  "raw/",
     "state/",
     "lambda/",
-	  "tables/ws_curated.db/",
     "jobs/scripts/",
 	  "jobs/libs/",
 	  "jobs/logs/spark-ui/",
@@ -139,7 +138,7 @@ resource "aws_iam_role" "lambda_role" {
 }
 
 locals {
-  permissions = [
+  lambda_permissions = [
     "arn:aws:iam::aws:policy/AmazonS3FullAccess",
     "arn:aws:iam::aws:policy/SecretsManagerReadWrite",
     "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
@@ -149,7 +148,7 @@ locals {
 
 resource "aws_iam_role_policy_attachment" "lambda_role_policy_attach" {
   role       = aws_iam_role.lambda_role.name
-  for_each   = toset(local.permissions)
+  for_each   = toset(local.lambda_permissions)
   policy_arn = each.value
 }
 
@@ -174,5 +173,89 @@ resource "aws_lambda_function" "ingest" {
       RAW_PREFIX = "raw"
       WISTIA_CHECKPOINT_PATH = "state/wistia_checkpoint.json"
     }
+  }
+}
+
+#=====================================
+# IAM for Glue Job
+#=====================================
+
+data "aws_iam_policy_document" "glue_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["glue.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "glue_role" {
+  name               = "ws-glue-role"
+  assume_role_policy = data.aws_iam_policy_document.glue_policy.json
+}
+
+locals {
+  glue_permissions = [
+    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+    "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess",
+    "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole",
+    "arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess"
+  ]
+}
+
+resource "aws_iam_role_policy_attachment" "glue_role_attachment" {
+  for_each   = toset(local.glue_permissions)
+  role       = aws_iam_role.glue_role.name
+  policy_arn = each.value
+}
+
+
+#=====================================
+# Glue Job
+#=====================================
+
+
+resource "aws_glue_job" "jobs" {
+  name     = "ws-raw-to-curated"
+  role_arn = aws_iam_role.glue_role.arn
+
+  glue_version      = "5.0"
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  timeout           = 10
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${aws_s3_bucket.bucket.bucket}/jobs/scripts/run.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+      "--enable-glue-datacatalog"          = "true"
+      "--enable-continuous-cloudwatch-log" = "true"
+      "--enable-continuous-log-filter"     = "true"
+      "--enable-job-insights"              = "true"
+      "--enable-spark-ui"                  = "true"
+      "--enable-metrics"                   = "true"
+
+      "--job-language"                     = "python"
+      "--job-bookmark-option"              = "job-bookmark-disable"
+
+      "--TempDir"                          = "s3://${aws_s3_bucket.bucket.bucket}/jobs/tmp/glue/"
+      "--spark-event-logs-path"            = "s3://${aws_s3_bucket.bucket.bucket}/jobs/logs/spark-ui/"
+
+      "--JOB_NAME"      = "ws-raw-to-curated"
+      "--PIPELINE_MODE"    = "full"
+      "--START_DATE"       = "2024-01-01"
+      "--SOURCE_DB"        = "ws_raw"
+      "--TARGET_DB"        = "ws_curated"
+      "--SOURCE_PATH"      = "s3a://${aws_s3_bucket.bucket.bucket}/raw"
+      "--WAREHOUSE_DIR"    = "s3a://${aws_s3_bucket.bucket.bucket}/tables"
+      "--extra-py-files"   = "s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/config.py,s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/main_bronze.py"
+    }
+
+  execution_property {
+    max_concurrent_runs = 1
   }
 }
