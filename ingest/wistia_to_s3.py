@@ -17,17 +17,6 @@ import datetime
 from config import *
 
 
-def write_json_lines_to_s3(s3, bucket_name, key, data: list[dict]):
-  # Serialize to JSON Lines
-  body = "\n".join(json.dumps(record) for record in data) + ("\n" if data else "")
-  s3.put_object(
-    Bucket=bucket_name,
-    Key=key,
-    Body=body,
-    ContentType="application/json",
-  )
-
-
 def ingest_media(ws, s3, cfg):
   """
   Ingest media metadata from Wistia API and write to S3
@@ -36,8 +25,12 @@ def ingest_media(ws, s3, cfg):
   data = ws.get_media(hashed_ids=[cfg.yt_media_id, cfg.fb_media_id])
 
   key = f"raw/media/ingest_date={ingest_date}/media.jsonl"
-  print(f"Writing media metadata to s3://{cfg.bucket_name}/{key}")
-  write_json_lines_to_s3(s3, cfg.bucket_name, key, data)
+
+  if cfg.dry_run:
+    info(f"[DRY RUN] Skip writing media metadata to s3://{cfg.bucket_name}/{key}")
+  else:
+    info(f"Writing media metadata to s3://{cfg.bucket_name}/{key}")
+    write_json_lines_to_s3(s3, cfg.bucket_name, key, data)
 
 
 def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
@@ -58,7 +51,7 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
     events.extend(media_events)
 
   if not events:
-    print(
+    info(
       f"No new events to ingest for media IDs for date range {start_date} to {end_date}."
     )
     return
@@ -69,8 +62,12 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
   else:
     filename = "events_full_refresh"
   key = f"{cfg.raw_prefix}/events/ingest_date={ingest_date}/{filename}.jsonl"
-  print(f"Writing events data to s3://{cfg.bucket_name}/{key}")
-  write_json_lines_to_s3(s3, cfg.bucket_name, key, events)
+
+  if cfg.dry_run:
+    info(f"[DRY RUN] Skip writing events data to s3://{cfg.bucket_name}/{key}")
+  else:
+    info(f"Writing events data to s3://{cfg.bucket_name}/{key}")
+    write_json_lines_to_s3(s3, cfg.bucket_name, key, events)
 
 
 def main(
@@ -87,7 +84,7 @@ def main(
   - bucket_name: S3 bucket for raw landing zone + state
   - checkpoint_path: S3 path to JSON file storing state checkpoint
   """
-  print(f"Running ingest script in mode: {pipeline_mode}")
+  info(f"Running ingest script in mode: {pipeline_mode}")
 
   c = load_config()
   api_token = load_secret(c.api_creds_secret)["token"]
@@ -97,18 +94,18 @@ def main(
   new_last_run_ts = datetime.datetime.utcnow().isoformat()
 
   if start_date:
-    print(f"Using provided start_date: {start_date}.")
+    info(f"Using provided start_date: {start_date}.")
     ingest_all_events(ws, s3, c, start_date=start_date)
 
   elif pipeline_mode == "incremental" and not start_date:
     start_date = load_checkpoint(s3, c.bucket_name, c.checkpoint_path)
 
-    print(f"Using checkpoint start_date: {start_date}")
+    info(f"Using checkpoint start_date: {start_date}")
 
     ingest_all_events(ws, s3, c, start_date=start_date)
 
   else:
-    print("Running full refresh for last 2 years")
+    info("Running full refresh for last 2 years")
 
     today = datetime.date.today()
 
@@ -120,9 +117,9 @@ def main(
   ingest_media(ws, s3, c)
 
   if persist_state:
-    print("Persisting state...")
+    info("Persisting state...")
     save_checkpoint(s3, c.bucket_name, c.checkpoint_path, new_last_run_ts)
   else:
-    print(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
+    info(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
 
   return {"start_date": start_date, "end_date": end_date}
