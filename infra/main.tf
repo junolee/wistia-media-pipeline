@@ -103,7 +103,10 @@ resource "aws_iam_policy" "github_actions_policy" {
           "lambda:GetFunction",
           "lambda:ListFunctions"
         ],
-        Resource = "arn:aws:lambda:us-east-1:423623837966:function:wistia_to_s3"
+        Resource = [
+          "arn:aws:lambda:us-east-1:423623837966:function:wistia_to_s3",
+          "arn:aws:lambda:us-east-1:423623837966:function:wistia_commit_checkpoint"
+        ]
       }
     ]
   })
@@ -162,7 +165,7 @@ resource "aws_lambda_function" "ingest" {
   timeout       = 900
 
   s3_bucket = "jl-wistia-pipeline"
-  s3_key    = "lambda/ingest_lambda.zip"
+  s3_key    = "lambda/wistia_to_s3.zip"
 
   environment {
     variables = {
@@ -171,6 +174,25 @@ resource "aws_lambda_function" "ingest" {
       API_TOKEN_SECRET_NAME = "wistia-api-token"
       BUCKET_NAME = "jl-wistia-pipeline"
       RAW_PREFIX = "raw"
+      WISTIA_CHECKPOINT_PATH = "state/wistia_checkpoint.json"
+      DRY_RUN = "false"
+    }
+  }
+}
+
+resource "aws_lambda_function" "commit_checkpoint" {
+  function_name = "wistia_commit_checkpoint"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "commit_checkpoint.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 60
+
+  s3_bucket = "jl-wistia-pipeline"
+  s3_key    = "lambda/wistia_commit_checkpoint.zip"
+
+  environment {
+    variables = {
+      BUCKET_NAME = "jl-wistia-pipeline"
       WISTIA_CHECKPOINT_PATH = "state/wistia_checkpoint.json"
       DRY_RUN = "false"
     }
@@ -315,12 +337,11 @@ resource "aws_sfn_state_machine" "ws_workflow" {
       "IngestLambda": {
         "Type": "Task",
         "Resource": "arn:aws:states:::lambda:invoke",
-        "OutputPath": "$.Payload",
+        "ResultPath": "$.ingest",
         "Parameters": {
           "FunctionName": "wistia_to_s3",
           "Payload": {
-            "pipeline_mode": "incremental",
-            "persist_state": true
+            "pipeline_mode": "incremental"
           }
         },
         "Next": "GlueJob"
@@ -332,8 +353,22 @@ resource "aws_sfn_state_machine" "ws_workflow" {
           "JobName": "ws-raw-to-curated",
             "Arguments": {
             "--PIPELINE_MODE": "incremental",
-            "--START_DATE.$": "$.start_date",
+            "--START_DATE.$": "$.ingest.Payload.start_date",
             "--DRY_RUN": "false"
+          }
+        },
+        "ResultPath": "$.glue",
+        "Next": "CommitCheckpoint"
+      },
+      "CommitCheckpoint": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke",
+        "OutputPath": "$.Payload",
+        "Parameters": {
+          "FunctionName": "wistia_commit_checkpoint",
+          "Payload": {
+            "new_last_run_ts.$": "$.ingest.Payload.new_last_run_ts",
+            "persist_state.$": "$.persist_state"
           }
         },
         "End": true
@@ -401,5 +436,8 @@ resource "aws_scheduler_schedule" "ws_workflow_daily" {
   target {
     arn      = aws_sfn_state_machine.ws_workflow.arn
     role_arn = aws_iam_role.eventbridge_scheduler_role.arn
+    input    = jsonencode({
+      persist_state = true
+    })
   }
 }

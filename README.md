@@ -59,8 +59,8 @@ Outputs:
 - Execute pipeline via Step Functions (see Appendix below)
 - Run parameters for Lambda function:
   - `--PIPELINE_MODE` (`full` or `incremental`)
-  - `--PERSIST_STATE` (`true` or `false`) - update state checkpoint
-- Lambda function outputs `start_date` and `end_date`
+- Lambda function outputs `start_date`, `end_date`, and `new_last_run_ts`
+- CommitCheckpoint Lambda input supports `persist_state` (`true` or `false`) to skip writing when needed (set on the Step Functions execution input)
 - Run parameters for Glue job:
   - `--PIPELINE_MODE` (`full` or `incremental`)
   - `--START_DATE` (`YYYY-MM-DD`, used when `--PIPELINE_MODE=incremental`)
@@ -120,12 +120,11 @@ Outputs:
     "IngestLambda": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "OutputPath": "$.Payload",
+      "ResultPath": "$.ingest",
       "Parameters": {
         "FunctionName": "wistia_to_s3",
         "Payload": {
-          "pipeline_mode": "incremental",
-          "persist_state": true
+          "pipeline_mode": "incremental"
         }
       },
       "Next": "GlueJob"
@@ -137,7 +136,21 @@ Outputs:
         "JobName": "ws-raw-to-curated",
           "Arguments": {
           "--PIPELINE_MODE": "incremental",
-          "--START_DATE.$": "$.start_date"
+          "--START_DATE.$": "$.ingest.Payload.start_date"
+        }
+      },
+      "ResultPath": "$.glue",
+      "Next": "CommitCheckpoint"
+    },
+    "CommitCheckpoint": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "FunctionName": "wistia_commit_checkpoint",
+        "Payload": {
+          "new_last_run_ts.$": "$.ingest.Payload.new_last_run_ts",
+          "persist_state.$": "$.persist_state"
         }
       },
       "End": true

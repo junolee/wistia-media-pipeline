@@ -13,7 +13,6 @@ def lambda_handler(event, context):
   try:
     results = main(
       pipeline_mode=event.get("pipeline_mode"),
-      persist_state=event.get("persist_state"),
       start_date=event.get("start_date"),
       end_date=event.get("end_date"),
     )

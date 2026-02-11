@@ -11,7 +11,6 @@ if __name__ == "__main__":
 
   event = {
     "pipeline_mode": "incremental",
-    "persist_state": True,
     # "start_date": "2025-05-29",
     # "end_date": "2026-01-28",
   }

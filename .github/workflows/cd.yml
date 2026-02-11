@@ -23,19 +23,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_GITHUB_ROLE_ARN }}
           aws-region: us-east-1
 
-      - name: Build Lambda
+      - name: Deploy Ingest Lambda
         working-directory: ingest
         run: |
-          rm local_run.py
-          pip install -r requirements-lambda.txt -t .
-          find . -type d -name "__pycache__" -exec rm -rf {} +
-          find . -type f -name "*.pyc" -delete
-          zip -r ../ingest_lambda.zip .
+          chmod +x deploy.sh
+          ./deploy.sh wistia_to_s3
 
-      - name: Deploy Lambda
+      - name: Deploy CommitCheckpoint Lambda
+        working-directory: ingest
         run: |
-          aws s3 cp ingest_lambda.zip s3://jl-wistia-pipeline/lambda/ingest_lambda.zip
-          aws lambda update-function-code --function-name wistia_to_s3 --s3-bucket jl-wistia-pipeline --s3-key lambda/ingest_lambda.zip --publish
+          ./deploy.sh wistia_commit_checkpoint
 
       - name: Upload Glue job scripts to S3
         run: |

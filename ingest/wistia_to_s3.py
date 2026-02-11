@@ -8,7 +8,7 @@ Run modes - set via main():
 - Incremental: ingest only events since the last successful run, based on state checkpoint in S3
 
 Notes:
-- If persist_state=True, an updated timestamp is saved to S3 at state_checkpoint_path after a successful run
+- An updated timestamp is returned for checkpointing, but persistence happens in a downstream step
 - Both modes ingest the latest media metadata using the Wistia API
 """
 
@@ -70,16 +70,12 @@ def ingest_all_events(ws, s3, cfg, start_date=None, end_date=None):
     write_json_lines_to_s3(s3, cfg.bucket_name, key, events)
 
 
-def main(
-  pipeline_mode="incremental", persist_state=False, start_date=None, end_date=None
-):
+def main(pipeline_mode="incremental", start_date=None, end_date=None):
   """
   Run ingestion in either Full Refresh or Incremental mode.
 
   Args:
     pipeline_mode: If "full_refresh", ingest all events (last 2 years). If "incremental", ingest only events since last run.
-    persist_state: If True, update state checkpoint for next incremental load.
-
   Requires config (loaded via load_config()):
   - bucket_name: S3 bucket for raw landing zone + state
   - checkpoint_path: S3 path to JSON file storing state checkpoint
@@ -116,10 +112,10 @@ def main(
 
   ingest_media(ws, s3, c)
 
-  if not c.dry_run and persist_state:
-    info("Persisting state...")
-    save_checkpoint(s3, c.bucket_name, c.checkpoint_path, new_last_run_ts)
-  else:
-    info(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
+  info(f"Not persisting state... Current run timestamp: {new_last_run_ts}")
 
-  return {"start_date": start_date, "end_date": end_date}
+  return {
+    "start_date": start_date,
+    "end_date": end_date,
+    "new_last_run_ts": new_last_run_ts,
+  }
