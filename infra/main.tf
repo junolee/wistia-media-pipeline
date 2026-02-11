@@ -331,7 +331,7 @@ resource "aws_sfn_state_machine" "ws_workflow" {
   role_arn = aws_iam_role.stepfunctions_role.arn
   definition = <<EOF
   {
-    "Comment": "ws-ingest lambda -> ws-glue job",
+    "Comment": "wistia ingest lambda -> raw to curated glue job -> commit checkpoint lambda",
     "StartAt": "IngestLambda",
     "States": {
       "IngestLambda": {
@@ -344,6 +344,19 @@ resource "aws_sfn_state_machine" "ws_workflow" {
             "pipeline_mode": "incremental"
           }
         },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "Lambda.ServiceException",
+              "Lambda.AWSLambdaException",
+              "Lambda.SdkClientException",
+              "Lambda.TooManyRequestsException"
+            ],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 2,
+            "BackoffRate": 2.0
+          }
+        ],
         "Next": "GlueJob"
       },
       "GlueJob": {
@@ -357,6 +370,14 @@ resource "aws_sfn_state_machine" "ws_workflow" {
             "--DRY_RUN": "false"
           }
         },
+        "Retry": [
+          {
+            "ErrorEquals": ["States.Timeout"],
+            "IntervalSeconds": 30,
+            "MaxAttempts": 2,
+            "BackoffRate": 2.0
+          }
+        ],
         "ResultPath": "$.glue",
         "Next": "CommitCheckpoint"
       },
@@ -371,6 +392,19 @@ resource "aws_sfn_state_machine" "ws_workflow" {
             "persist_state.$": "$.persist_state"
           }
         },
+        "Retry": [
+          {
+            "ErrorEquals": [
+              "Lambda.ServiceException",
+              "Lambda.AWSLambdaException",
+              "Lambda.SdkClientException",
+              "Lambda.TooManyRequestsException"
+            ],
+            "IntervalSeconds": 2,
+            "MaxAttempts": 2,
+            "BackoffRate": 2.0
+          }
+        ],
         "End": true
       }
     },

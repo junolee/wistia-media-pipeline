@@ -63,9 +63,10 @@ Step Functions provides state passing, retries/timeouts, and centralized executi
   - `persist_state`: `true` | `false` (controls whether `wistia_commit_checkpoint` writes the watermark)
 
 ## Failure handling
-- Ingestion retries: transient Wistia API errors retry with backoff; non-retryable errors fail the execution.
-- Glue failures: Glue runs synchronously; failures fail the execution and block checkpoint commit.
-- Safe re-runs: `raw/` is append-only. The incremental checkpoint is written only after Glue succeeds, so failures do not advance the watermark.
+- Application retries: transient Wistia API errors retry with backoff; non-retryable errors raise and fail the Lambda invocation.
+- Orchestration retries: Step Functions retries transient Lambda invoke failures and Glue step timeouts (limited retries w/ backoff).
+- Failure propagation: if ingestion or Glue fails after retries, the Step Functions execution fails and the checkpoint is not committed.
+- Safe re-runs: `raw/` is append-only and `new_last_run_ts` is persisted only after Glue succeeds, so failures don’t advance the watermark.
 - Operator action: fix the issue, then re-run the Step Functions execution.
 
 ## Deploy
@@ -124,13 +125,12 @@ chmod +x deploy.sh
 ├── README.md
 └── requirements.txt
 ```
-
-- `setup/*` generates DDL to run in Athena to create external tables in Glue Data Catalog
-- `ingest/*` defines the lambda function `wistia_to_s3` that incrementally ingests from Wistia API to `/raw` directory in S3
-- `ingest/commit_checkpoint.py` writes the ingestion checkpoint after Glue succeeds
-- `jobs/*` defines the glue pyspark job to build the curated layer of this pipeline
-- `.github/workflows/*` defines continuous integration and deployment YAML for Github Actions
-- `infra/main.tf` terraform script used to create lambda function, glue job, step function state machine, eventbridge scheduler, and IAM roles
+- `setup/`: Athena DDL to create external Glue tables
+- `infra/`: Terraform for Lambdas, Glue job, Step Functions State Machine, Eventbridge Scheduler, S3, IAM
+- `jobs/`: Glue PySpark job to build/update curated tables
+- `ingest/`: Lambda functions, deploy script, local runner
+- `.github/`: CI (syntax checks) + CD (deploy Lambda functions and Glue job)
+- `.env.example`: Local env var template
 - Additional files for local development
   - `.env` (see `.env.example`) - environment variables for local development and testing
   - `.job.sh` - scripts to run glue job locally using docker container for glue runtime
@@ -146,10 +146,7 @@ chmod +x deploy.sh
 ## Example Step Functions JSON
 ```json
 {
-  "Comment": "ws-ingest lambda -> ws-glue job",
-  "Input": {
-    "persist_state": true
-  },
+  "Comment": "wistia ingest lambda -> raw to curated glue job -> commit checkpoint lambda",
   "StartAt": "IngestLambda",
   "States": {
     "IngestLambda": {
@@ -162,6 +159,19 @@ chmod +x deploy.sh
           "pipeline_mode": "incremental"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
       "Next": "GlueJob"
     },
     "GlueJob": {
@@ -171,9 +181,18 @@ chmod +x deploy.sh
         "JobName": "ws-raw-to-curated",
           "Arguments": {
           "--PIPELINE_MODE": "incremental",
-          "--START_DATE.$": "$.ingest.Payload.start_date"
+          "--START_DATE.$": "$.ingest.Payload.start_date",
+          "--DRY_RUN": "false"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.Timeout"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
       "ResultPath": "$.glue",
       "Next": "CommitCheckpoint"
     },
@@ -188,6 +207,19 @@ chmod +x deploy.sh
           "persist_state.$": "$.persist_state"
         }
       },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
       "End": true
     }
   },
