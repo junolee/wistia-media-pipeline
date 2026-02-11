@@ -50,7 +50,7 @@ def load_config() -> AppConfig:
     dry_run=os.environ.get("DRY_RUN", "false").lower() == "true",
   )
   info(
-    "Loaded config bucket=%s, raw_prefix=%s, checkpoint_path=%s, dry_run=%s, rerun=%s",
+    "Loaded config bucket=%s, raw_prefix=%s, checkpoint_path=%s, dry_run=%s",
     c.bucket_name,
     c.raw_prefix,
     c.checkpoint_path,
