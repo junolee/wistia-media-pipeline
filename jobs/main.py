@@ -70,6 +70,8 @@ def build_visitors(raw_eventsDF):
     .withColumn("updated_at", F.current_timestamp())
   )
 
+  visitors = dedupe(visitors, "visitor_id")
+
   return visitors.select(
     [
       "visitor_id",
@@ -122,6 +124,8 @@ def build_media(raw_mediaDF, raw_eventsDF):
     .withColumn("updated_at", F.current_timestamp())
   ).join(media_urls, on="media_id", how="left")
 
+  mediaDF = dedupe(mediaDF, "media_id")
+
   return mediaDF.select(
     [
       "media_id",
@@ -170,6 +174,7 @@ def build_events(raw_eventsDF, mediaDF):
   eventsDF = eventsDF.withColumn(
     "duration_viewed", F.col("duration") * F.col("percent_viewed") / 100
   )
+  eventsDF = dedupe(eventsDF, ["media_id", "visitor_id", "created_at"])
 
   return eventsDF.select(
     [
@@ -201,6 +206,7 @@ def build_media_engagement(eventsDF, mediaDF):
     .withColumn("p_date", F.col("date"))
     .withColumn("updated_at", F.current_timestamp())
   )
+  dailyDF = dedupe(dailyDF, ["media_id", "visitor_id", "date"])
   return dailyDF.select(
     [
       "media_id",
@@ -256,6 +262,7 @@ def build_dates(spark, raw_eventsDF):
   datesDF = generated_datesDF.join(observed_datesDF, on="date", how="left").withColumn(
     "updated_at", F.current_timestamp()
   )
+  datesDF = dedupe(datesDF, "date")
 
   return datesDF.select(
     [
@@ -273,23 +280,18 @@ def build_dates(spark, raw_eventsDF):
   )
 
 
-def append_parquet(df, path):
-  """
-  Append data to existing Parquet files at path
-  """
-  info(f"Appending data to path: {path}")
-  df.write.mode("append").parquet(path)
-
-
-def overwrite_table(df, table):
+def overwrite_table(df, table, dry_run=False):
   """
   Overwrite a non-partitioned Glue table (full rebuild)
   """
-  info(f"Overwriting full table: {table}")
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
+  if not dry_run:
+    info(f"Overwriting full table: {table}")
+    df.write.mode("overwrite").insertInto(table, overwrite=True)
+  else:
+    info(f"[DRY RUN] Skip overwriting full table: {table}")
 
 
-def overwrite_partitions(spark, df, table, partition_col):
+def overwrite_partitions(spark, df, table, partition_col, dry_run=False):
   """
   Overwrite `table` only for partitions present in `df` (dynamic partition overwrite)
   Run MSCK REPAIR TABLE to refresh partition metadata in Glue Catalog
@@ -297,13 +299,54 @@ def overwrite_partitions(spark, df, table, partition_col):
   partitions = [
     row[partition_col] for row in df.select(partition_col).distinct().collect()
   ]
-  info(f"Overwriting {table} table partitions: {partitions}")
 
-  value_columns = [c for c in df.columns if c != partition_col]
-  df = df.select(*value_columns, partition_col)  # order partition col last
+  if not dry_run:
+    info(f"Overwriting {table} table partitions: {partitions}")
 
-  df.write.mode("overwrite").insertInto(table, overwrite=True)
-  spark.sql(f"MSCK REPAIR TABLE {table}")
+    value_columns = [c for c in df.columns if c != partition_col]
+    df = df.select(*value_columns, partition_col)  # order partition col last
+
+    df.write.mode("overwrite").insertInto(table, overwrite=True)
+    spark.sql(f"MSCK REPAIR TABLE {table}")
+  else:
+    info(f"[DRY RUN] Skip overwriting {table} table partitions: {partitions}")
+
+
+def write_tables(spark, tables, partition_col, cfg):
+  for table, df in tables.items():
+    info(f"Processed {df.count()} records to write to {table}")
+
+    if partition_col:
+      overwrite_partitions(
+        spark,
+        df,
+        table=f"{cfg.target_db}.{table}",
+        partition_col=partition_col,
+        dry_run=cfg.dry_run,
+      )
+
+    else:
+      overwrite_table(
+        df,
+        table=f"{cfg.target_db}.{table}",
+        dry_run=cfg.dry_run,
+      )
+
+
+def filter_events_if_needed(raw_eventsDF, cfg):
+  if cfg.pipeline_mode == "incremental" and cfg.start_date:
+    info(f"Filtering raw_eventsDF to records since start_date: {cfg.start_date}")
+
+    filtered_events_DF = raw_eventsDF.filter(
+      F.to_date(F.col("received_at"), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+      >= F.lit(cfg.start_date)
+    )
+    return filtered_events_DF
+  else:
+    info(
+      "No filtering applied to raw_eventsDF - pipeline_mode is not incremental or start_date not provided"
+    )
+    return raw_eventsDF
 
 
 def main(spark, config):
@@ -315,51 +358,36 @@ def main(spark, config):
     target_db: target database name
     target_dir: target directory for target_db
     pipeline_mode: "full" loads all data
-                   "incremental" loads records since start_date
-    start_date: lower bound for event timestamp filter (YYYY-MM-DD) in incremental mode
+                   "incremental" loads records since start_date (ignored if start_date not provided)
+    start_date: lower bound for event timestamp filter (YYYY-MM-DD) in incremental mode (ignored if pipeline_mode is "full")
+    dry_run: if True, skip writing to target tables
   """
   c = config
-
-  info(f"Starting job - config: {c}")
-
   raw_mediaDF = load_raw(spark, f"{c.source_path}/media/")
   raw_eventsDF = load_raw(spark, f"{c.source_path}/events/")
 
+  # build dimension tables from unfiltered raw events
+  dim_mediaDF = build_media(raw_mediaDF, raw_eventsDF)
   dim_datesDF = build_dates(spark, raw_eventsDF)
   dim_visitorsDF = build_visitors(raw_eventsDF)
-  dim_mediaDF = build_media(raw_mediaDF, raw_eventsDF)
 
-  if c.pipeline_mode == "incremental" and c.start_date:
-    raw_eventsDF = raw_eventsDF.filter(
-      F.to_date(F.col("received_at"), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-      >= F.lit(c.start_date)
-    )
-    info(f"Filtered raw_eventsDF to records since start_date: {c.start_date}")
-
-  fct_eventsDF = build_events(raw_eventsDF, dim_mediaDF)
+  # build fact tables from filtered events if incremental mode + start_date provided; otherwise use all events
+  filtered_eventsDF = filter_events_if_needed(raw_eventsDF, c)
+  fct_eventsDF = build_events(filtered_eventsDF, dim_mediaDF)
   fct_media_engagementDF = build_media_engagement(fct_eventsDF, dim_mediaDF)
 
-  SILVER_TABLES = {
-    "dim_dates": dedupe(dim_datesDF, "date"),
-    "dim_visitors": dedupe(dim_visitorsDF, "visitor_id"),
-    "dim_media": dedupe(dim_mediaDF, "media_id"),
-    "fct_events": dedupe(fct_eventsDF, ["media_id", "visitor_id", "created_at"]),
-    "fct_media_engagement": dedupe(
-      fct_media_engagementDF, ["media_id", "visitor_id", "date"]
-    ),
+  dimension_tables = {
+    "dim_dates": dim_datesDF,
+    "dim_visitors": dim_visitorsDF,
+    "dim_media": dim_mediaDF,
   }
 
-  counts = []
-  for table, df in SILVER_TABLES.items():
-    if table == "fct_events" or table == "fct_media_engagement":
-      overwrite_partitions(
-        spark, df, table=f"{c.target_db}.{table}", partition_col="p_date"
-      )
-    else:
-      overwrite_table(df, table=f"{c.target_db}.{table}")
+  fact_tables = {
+    "fct_events": fct_eventsDF,
+    "fct_media_engagement": fct_media_engagementDF,
+  }
+  write_tables(spark, tables=dimension_tables, partition_col=None, cfg=c)
+  write_tables(spark, tables=fact_tables, partition_col="p_date", cfg=c)
 
-    counts.append(f"{table}: {df.count()}")
-
-  print("\nTarget table counts:", counts)
-  table_counts(spark, schemas=[c.target_db])
-  info(f"Completed job - config: {c}.")
+  table_counts(spark, schemas=[c.target_db], cfg=c)
+  info("Completed job.")

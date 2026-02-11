@@ -7,6 +7,7 @@ JOB_NAME="wistia_job"
 PIPELINE_MODE="incremental"
 START_DATE="2026-01-01"
 TARGET_DB=$TARGET_DB # $TARGET_TEST_DB
+DRY_RUN="true"
 
 SCRIPT_FILE_NAME="run.py"
 EXTRA_CONFIG_FILE="config.py"
@@ -29,4 +30,6 @@ docker run -it --rm \
     --WAREHOUSE_DIR $WAREHOUSE_DIR \
     --TARGET_DB $TARGET_DB \
     --PIPELINE_MODE $PIPELINE_MODE \
-    --START_DATE $START_DATE
+    --START_DATE $START_DATE \
+    --DRY_RUN $DRY_RUN \
+
