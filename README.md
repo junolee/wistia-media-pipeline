@@ -24,32 +24,28 @@ Outputs:
 
 * Directories in S3 bucket
   * `raw/`: landing area for data ingested from Wistia API stored as JSON files
-  * `tables/`: curated parquet datasets (registered as Glue external tables)
+  * `tables/`: curated parquet datasets (referenced by Glue external tables)
   * `state/`: json file tracking watermark for incremental ingestion
 * Glue Data Catalog databases
   * `raw`: landing/staging tables registered over raw JSON
   * `curated`: parquet fact & dimension tables used for analytics
 
-#### Ingestion
+#### Pipeline Components
 
-* `wistia_to_s3` (Lambda)
-  * Authenticates via token in AWS Secrets Manager
-  * Fetches visitor-level data, engagement metrics, and media metadata (paginated)
-  * Uses `created_at`/`updated_at` for incremental ingestion; retries API requests with exponential backoff
-  * Writes raw JSON + ingestion metadata to `raw/`
-* `wistia_commit_checkpoint` (Lambda)
+* Lambda function: `wistia_to_s3`
+  * Auth token in Secrets Manager; paginated fetch; incremental ingestion (via `created_at`/`updated_at`)
+  * Retries API requests w/ exponential backoff; writes raw JSON + ingestion metadata to `raw/`
+* Glue job: `ws-raw-to-curated` (PySpark)
+  * Incrementally processes `raw/` JSON and writes curated Parquet datasets to `tables/`, updating `curated` tables in the Glue Data Catalog
+* Lambda function: `wistia_commit_checkpoint`
   * Persists the updated watermark (`new_last_run_ts`) to `state/`
 
-#### Glue ETL Job
-* Glue job (PySpark) incrementally processes `raw/` JSON and writes curated Parquet datasets to `tables/`, updating `curated` tables in the Glue Data Catalog
-
 #### Orchestration
-EventBridge triggers a Step Functions state machine that runs:
-1. `wistia_to_s3` (Lambda): ingest to `raw/` and compute incremental parameters
-2. `ws-raw-to-curated` (Glue): build and update curated tables (runs with the computed `start_date` when incremental)
-3. `wistia_commit_checkpoint` (Lambda): persist `new_last_run_ts` only after Glue job succeeds
-
-Step Functions provides state passing, retries/timeouts, and centralized execution-level observability.
+- EventBridge triggers a Step Functions state machine that runs:
+  1. `wistia_to_s3` (Lambda): ingest to `raw/` and compute incremental parameters
+  2. `ws-raw-to-curated` (Glue): build/update curated tables (runs w/ computed `start_date` when incremental)
+  3. `wistia_commit_checkpoint` (Lambda): persist `new_last_run_ts` only after Glue job succeeds
+- Step Functions provides state passing, centralized execution-level observability, and limited retries (Lambda invoke errors, Glue timeouts).
 
 #### Consumption
 
@@ -63,11 +59,11 @@ Step Functions provides state passing, retries/timeouts, and centralized executi
   - `persist_state`: `true` | `false` (controls whether `wistia_commit_checkpoint` writes the watermark)
 
 ## Failure handling
-- Application retries: transient Wistia API errors retry with backoff; non-retryable errors raise and fail the Lambda invocation.
-- Orchestration retries: Step Functions retries transient Lambda invoke failures and Glue step timeouts (limited retries w/ backoff).
-- Failure propagation: if ingestion or Glue fails after retries, the Step Functions execution fails and the checkpoint is not committed.
-- Safe re-runs: `raw/` is append-only and `new_last_run_ts` is persisted only after Glue succeeds, so failures don’t advance the watermark.
-- Operator action: fix the issue, then re-run the Step Functions execution.
+- **Application retries:** transient Wistia API errors retry with backoff; non-retryable errors raise and fail the Lambda invocation.
+- **Orchestration retries:** Step Functions retries transient Lambda invoke failures and Glue step timeouts (limited retries w/ backoff).
+- **Failure propagation:** if ingestion or Glue fails after retries, the Step Functions execution fails and the checkpoint is not committed.
+- **Safe re-runs:** `raw/` is append-only and `new_last_run_ts` is persisted only after Glue succeeds, so failures don’t advance the watermark.
+- **Operator action:** fix the issue, then re-run the Step Functions execution.
 
 ## Deploy
 
@@ -126,14 +122,14 @@ chmod +x deploy.sh
 └── requirements.txt
 ```
 - `setup/`: Athena DDL to create external Glue tables
-- `infra/`: Terraform for Lambdas, Glue job, Step Functions State Machine, Eventbridge Scheduler, S3, IAM
+- `infra/`: Terraform for Lambdas, Glue job, Step Functions State Machine, EventBridge Scheduler, S3, IAM
 - `jobs/`: Glue PySpark job to build/update curated tables
 - `ingest/`: Lambda functions, deploy script, local runner
 - `.github/`: CI (syntax checks) + CD (deploy Lambda functions and Glue job)
+
+Additional files for local development
 - `.env.example`: Local env var template
-- Additional files for local development
-  - `.env` (see `.env.example`) - environment variables for local development and testing
-  - `.job.sh` - scripts to run glue job locally using docker container for glue runtime
+- `.job.sh` - local job run script using docker container for glue runtime
 
 ## Data Model
 - `fct_media_engagement` (PK: media_id, visitor_id, date), play_count, total_watch_time, avg_watch_time_per_view, max_percent_viewed, avg_percent_viewed, updated_at
