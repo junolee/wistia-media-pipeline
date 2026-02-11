@@ -116,7 +116,7 @@ def main(
 
   ingest_media(ws, s3, c)
 
-  if persist_state:
+  if not c.dry_run and persist_state:
     info("Persisting state...")
     save_checkpoint(s3, c.bucket_name, c.checkpoint_path, new_last_run_ts)
   else:
