@@ -172,6 +172,7 @@ resource "aws_lambda_function" "ingest" {
       BUCKET_NAME = "jl-wistia-pipeline"
       RAW_PREFIX = "raw"
       WISTIA_CHECKPOINT_PATH = "state/wistia_checkpoint.json"
+      DRY_RUN = "false"
     }
   }
 }
@@ -250,6 +251,7 @@ resource "aws_glue_job" "jobs" {
       "--START_DATE"       = "2024-01-01"
       "--SOURCE_DB"        = "ws_raw"
       "--TARGET_DB"        = "ws_curated"
+      "--DRY_RUN"          = "false"
       "--SOURCE_PATH"      = "s3a://${aws_s3_bucket.bucket.bucket}/raw"
       "--WAREHOUSE_DIR"    = "s3a://${aws_s3_bucket.bucket.bucket}/tables"
       "--extra-py-files"   = "s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/config.py,s3://${aws_s3_bucket.bucket.bucket}/jobs/libs/main.py"
@@ -330,7 +332,8 @@ resource "aws_sfn_state_machine" "ws_workflow" {
           "JobName": "ws-raw-to-curated",
             "Arguments": {
             "--PIPELINE_MODE": "incremental",
-            "--START_DATE.$": "$.start_date"
+            "--START_DATE.$": "$.start_date",
+            "--DRY_RUN": "false"
           }
         },
         "End": true
